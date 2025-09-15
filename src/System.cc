@@ -32,6 +32,7 @@
 #include <boost/archive/binary_oarchive.hpp>
 #include <boost/archive/xml_iarchive.hpp>
 #include <boost/archive/xml_oarchive.hpp>
+#include "SonarData.h"
 
 namespace ORB_SLAM3
 {
@@ -73,6 +74,13 @@ System::System(const string &strVocFile, const string &strSettingsFile, const eS
        cerr << "Failed to open settings file at: " << strSettingsFile << endl;
        exit(-1);
     }
+
+    // Initialize PingIntegration
+    // C++11 style
+    pingIntegrator.reset(new PingIntegration(strSettingsFile));
+
+
+
 
     cv::FileNode node = fsSettings["File.version"];
     if(!node.empty() && node.isString() && node.string() == "1.0"){
@@ -396,7 +404,14 @@ Sophus::SE3f System::TrackRGBD(const cv::Mat &im, const cv::Mat &depthmap, const
     return Tcw;
 }
 
-Sophus::SE3f System::TrackMonocular(const cv::Mat &im, const double &timestamp, const vector<IMU::Point>& vImuMeas, string filename)
+
+Sophus::SE3f System::TrackMonocular(const cv::Mat &im,
+                                    const double &timestamp,
+                                    const std::vector<IMU::Point>& vImuMeas,
+                                    std::string filename,
+                                    const SonarData &sonar)
+
+
 {
 
     {
@@ -463,7 +478,15 @@ Sophus::SE3f System::TrackMonocular(const cv::Mat &im, const double &timestamp, 
         for(size_t i_imu = 0; i_imu < vImuMeas.size(); i_imu++)
             mpTracker->GrabImuData(vImuMeas[i_imu]);
 
-    Sophus::SE3f Tcw = mpTracker->GrabImageMonocular(imToFeed,timestamp,filename);
+    std::cout << "[System::TrackMonocular] t=" << timestamp
+          << " sonar_range=" << sonar.range
+          << " angle=" << sonar.angle
+          << " samples=" << sonar.number_of_samples
+          << " intensity=" << sonar.intensities.size()
+          << std::endl;
+
+    Sophus::SE3f Tcw = mpTracker->GrabImageMonocular(imToFeed, timestamp, filename, sonar);
+
 
     unique_lock<mutex> lock2(mMutexState);
     mTrackingState = mpTracker->mState;

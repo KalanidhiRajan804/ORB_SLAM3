@@ -1,0 +1,44 @@
+xhost +local:docker
+docker start -ai slamros
+docker exec -it slamros bash
+
+
+cd /ORB_SLAM3
+rm -rf build
+mkdir build
+cd build
+cmake ..
+make -j$(nproc)
+
+cd ~/catkin_ws
+catkin_make -j$(nproc)
+
+source ~/catkin_ws/devel/setup.bash
+
+
+
+Terminal 1
+roscore
+
+Terminal 2
+rosbag play /Datasets/run01.bag --clock
+
+Terminal 3
+source /root/catkin_ws/devel/setup.bash
+roslaunch orbslam3_ros mono_sonar.launch
+
+
+visualize
+rosrun image_transport republish compressed in:=/usb_cam/image_raw raw out:=/camera/image_raw
+rqt_image_view /camera/image_raw
+
+
+
+plugin to uncompress files
+apt-get update
+apt-get install -y ros-noetic-compressed-image-transport
+
+
+
+rm /catkin_ws/devel/lib/python3/dist-packages/ping360_sonar/__init__.pyrosrun orbslam3_ros mono_sonar Vocabulary/ORBvoc.txt config.yaml
+rosrun orbslam3_ros mono_sonar Vocabulary/ORBvoc.txt config.yaml

@@ -1,0 +1,90 @@
+%YAML:1.0
+
+# --- Camera (pinhole) ---
+Camera.type: PinHole
+Camera.fx: 1106.664932673783
+Camera.fy: 1101.686999186332
+Camera.cx: 950.2588821791429
+Camera.cy: 570.6784624863794
+Camera.width: 1920
+Camera.height: 1080
+Camera.k1: 0.03445177
+Camera.k2: 0.00099011
+Camera.p1: -0.00144313
+Camera.p2: 0.00195414
+Camera.fps: 30
+Camera.RGB: 1
+
+# --- ORB extractor parameters ---
+ORBextractor.nFeatures: 1500
+ORBextractor.scaleFactor: 1.2
+ORBextractor.nLevels: 8
+ORBextractor.iniThFAST: 20
+ORBextractor.minThFAST: 7
+
+# --- Viewer parameters ---
+Viewer.KeyFrameSize: 0.05
+Viewer.KeyFrameLineWidth: 1
+Viewer.GraphLineWidth: 0.9
+Viewer.PointSize: 2
+Viewer.CameraSize: 0.08
+Viewer.CameraLineWidth: 3
+Viewer.ViewpointX: 0
+Viewer.ViewpointY: -0.7
+Viewer.ViewpointZ: -1.8
+Viewer.ViewpointF: 500
+
+# --- Sonar (Ping360-like) ---
+
+
+Sonar.R_sc: !!opencv-matrix
+    rows: 3
+    cols: 3
+    dt: f
+    data: [-0.95525842, -0.27399427,  0.11139338,
+            0.27608031, -0.96112838,  0.00345058,
+            0.10611790,  0.03404971,  0.99377040]
+
+Sonar.t_sc: !!opencv-matrix
+    rows: 3
+    cols: 1
+    dt: f
+    data: [ 0.11083195,
+           -0.13066335,
+           -0.09488232 ]
+Sonar.hfov_deg: 2.0
+Sonar.vfov_deg: 25.0
+Sonar.RangeMin: 0.75
+Sonar.RangeMax: 3.0
+Sonar.MaxTimeDiff: 0.05
+Sonar.StepCount: 400
+Sonar.ForwardStep: 200
+Sonar.Clockwise: 1
+Sonar.Yaw0Deg: 0.0
+
+Sonar.abs_thresh: 40   # absolute intensity threshold
+Sonar.peak_prom: 20      # required prominence above neighbors
+Sonar.band_lo: 1.0       # lower bound of valid detection band (m)
+Sonar.band_hi: 1.3       # upper bound of valid detection band (m)
+
+
+
+
+# Sonar:
+#   T_sc: !!opencv-matrix
+#     rows: 4
+#     cols: 4
+#     dt: d
+#     data: [0.95525842, 0.27399427, 0.11139338, 0.11083195,
+#            -0.27608031, 0.96112838, 0.00345058, -0.13066335,
+#            -0.10611790, -0.03404971, 0.99377040, -0.09488232,
+#             0.0, 0.0, 0.0, 1.0]
+#   hfov_deg: 2.0
+#   vfov_deg: 25.0
+#   RangeMin: 0.3
+#   RangeMax: 30.0
+#   MaxTimeDiff: 0.05
+#   StepCount: 400
+#   ForwardStep: 200
+#   Clockwise: 1
+#   Yaw0Deg: 0.0

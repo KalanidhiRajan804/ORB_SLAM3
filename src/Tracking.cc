@@ -28,11 +28,14 @@
 #include "KannalaBrandt8.h"
 #include "MLPnPsolver.h"
 #include "GeometricTools.h"
+#include "PingIntegration.h"
 
 #include <iostream>
 
+
 #include <mutex>
 #include <chrono>
+
 
 
 using namespace std;
@@ -1563,7 +1566,12 @@ Sophus::SE3f Tracking::GrabImageRGBD(const cv::Mat &imRGB,const cv::Mat &imD, co
 }
 
 
-Sophus::SE3f Tracking::GrabImageMonocular(const cv::Mat &im, const double &timestamp, string filename)
+Sophus::SE3f Tracking::GrabImageMonocular(const cv::Mat &im,
+                                          const double &timestamp,
+                                          std::string filename,
+                                          const SonarData &sonar)
+
+
 {
     mImGray = im;
     if(mImGray.channels()==3)
@@ -1604,14 +1612,29 @@ Sophus::SE3f Tracking::GrabImageMonocular(const cv::Mat &im, const double &times
     mCurrentFrame.mNameFile = filename;
     mCurrentFrame.mnDataset = mnNumDataset;
 
+    // Store sonar in the frame
+    mCurrentFrame.mSonarData = sonar;
+
+    // Apply sonar fusion (full struct now)
+    ApplySonarFusion(mCurrentFrame);
+
+
 #ifdef REGISTER_TIMES
     vdORBExtract_ms.push_back(mCurrentFrame.mTimeORB_Ext);
 #endif
+    
 
     lastID = mCurrentFrame.mnId;
     Track();
 
     return mCurrentFrame.GetPose();
+
+
+    // Store sonar in the frame
+    mCurrentFrame.mSonarData = sonar;
+
+    // Apply sonar fusion (full struct now)
+    ApplySonarFusion(mCurrentFrame);
 }
 
 
@@ -2447,72 +2470,78 @@ void Tracking::StereoInitialization()
 
 void Tracking::MonocularInitialization()
 {
-
     if(!mbReadyToInitializate)
     {
-        // Set Reference Frame
-        if(mCurrentFrame.mvKeys.size()>100)
+        // Set Reference Frame if enough features
+        if(mCurrentFrame.mvKeys.size() > 100)
         {
-
             mInitialFrame = Frame(mCurrentFrame);
             mLastFrame = Frame(mCurrentFrame);
+
             mvbPrevMatched.resize(mCurrentFrame.mvKeysUn.size());
-            for(size_t i=0; i<mCurrentFrame.mvKeysUn.size(); i++)
-                mvbPrevMatched[i]=mCurrentFrame.mvKeysUn[i].pt;
+            for(size_t i = 0; i < mCurrentFrame.mvKeysUn.size(); i++)
+                mvbPrevMatched[i] = mCurrentFrame.mvKeysUn[i].pt;
 
-            fill(mvIniMatches.begin(),mvIniMatches.end(),-1);
+            fill(mvIniMatches.begin(), mvIniMatches.end(), -1);
 
-            if (mSensor == System::IMU_MONOCULAR)
+            // If we’re in IMU_MONOCULAR, prepare IMU preintegration
+            if(mSensor == System::IMU_MONOCULAR)
             {
                 if(mpImuPreintegratedFromLastKF)
-                {
                     delete mpImuPreintegratedFromLastKF;
-                }
-                mpImuPreintegratedFromLastKF = new IMU::Preintegrated(IMU::Bias(),*mpImuCalib);
-                mCurrentFrame.mpImuPreintegrated = mpImuPreintegratedFromLastKF;
 
+                mpImuPreintegratedFromLastKF = new IMU::Preintegrated(IMU::Bias(), *mpImuCalib);
+                mCurrentFrame.mpImuPreintegrated = mpImuPreintegratedFromLastKF;
             }
 
             mbReadyToInitializate = true;
-
             return;
         }
     }
     else
     {
-        if (((int)mCurrentFrame.mvKeys.size()<=100)||((mSensor == System::IMU_MONOCULAR)&&(mLastFrame.mTimeStamp-mInitialFrame.mTimeStamp>1.0)))
+        // Reset if not enough features or too much IMU time drift
+        if( (int)mCurrentFrame.mvKeys.size() <= 100 ||
+            (mSensor == System::IMU_MONOCULAR &&
+             (mLastFrame.mTimeStamp - mInitialFrame.mTimeStamp > 1.0)) )
         {
             mbReadyToInitializate = false;
-
             return;
         }
 
-        // Find correspondences
-        ORBmatcher matcher(0.9,true);
-        int nmatches = matcher.SearchForInitialization(mInitialFrame,mCurrentFrame,mvbPrevMatched,mvIniMatches,100);
+        // Match with initial frame
+        ORBmatcher matcher(0.9, true);
+        int nmatches = matcher.SearchForInitialization(mInitialFrame, mCurrentFrame,
+                                                       mvbPrevMatched, mvIniMatches, 100);
 
-        // Check if there are enough correspondences
-        if(nmatches<100)
+        if(nmatches < 100)
         {
             mbReadyToInitializate = false;
             return;
         }
 
         Sophus::SE3f Tcw;
-        vector<bool> vbTriangulated; // Triangulated Correspondences (mvIniMatches)
+        vector<bool> vbTriangulated;
 
-        if(mpCamera->ReconstructWithTwoViews(mInitialFrame.mvKeysUn,mCurrentFrame.mvKeysUn,mvIniMatches,Tcw,mvIniP3D,vbTriangulated))
+        // Try to reconstruct with two views
+        if(mpCamera->ReconstructWithTwoViews(mInitialFrame.mvKeysUn,
+                                             mCurrentFrame.mvKeysUn,
+                                             mvIniMatches,
+                                             Tcw,
+                                             mvIniP3D,
+                                             vbTriangulated))
         {
-            for(size_t i=0, iend=mvIniMatches.size(); i<iend;i++)
+            // Clean out non-triangulated matches
+            for(size_t i = 0, iend = mvIniMatches.size(); i < iend; i++)
             {
-                if(mvIniMatches[i]>=0 && !vbTriangulated[i])
+                if(mvIniMatches[i] >= 0 && !vbTriangulated[i])
                 {
-                    mvIniMatches[i]=-1;
+                    mvIniMatches[i] = -1;
                     nmatches--;
                 }
             }
 
-            // Set Frame Poses
+            // Set poses
             mInitialFrame.SetPose(Sophus::SE3f());
             mCurrentFrame.SetPose(Tcw);
 
@@ -2523,140 +2552,116 @@ void Tracking::MonocularInitialization()
 
 
 
+
 void Tracking::CreateInitialMapMonocular()
 {
-    // Create KeyFrames
-    KeyFrame* pKFini = new KeyFrame(mInitialFrame,mpAtlas->GetCurrentMap(),mpKeyFrameDB);
-    KeyFrame* pKFcur = new KeyFrame(mCurrentFrame,mpAtlas->GetCurrentMap(),mpKeyFrameDB);
+    // -------------------------------
+    // 1. Create KeyFrames (Initial + Current)
+    // -------------------------------
+    KeyFrame* pKFini = new KeyFrame(mInitialFrame, mpAtlas->GetCurrentMap(), mpKeyFrameDB);
+KeyFrame* pKFcur = new KeyFrame(mCurrentFrame, mpAtlas->GetCurrentMap(), mpKeyFrameDB);
 
-    if(mSensor == System::IMU_MONOCULAR)
-        pKFini->mpImuPreintegrated = (IMU::Preintegrated*)(NULL);
 
 
+    // Compute BoW for relocalization & place recognition
     pKFini->ComputeBoW();
     pKFcur->ComputeBoW();
 
-    // Insert KFs in the map
+    // Insert into map
     mpAtlas->AddKeyFrame(pKFini);
     mpAtlas->AddKeyFrame(pKFcur);
 
-    for(size_t i=0; i<mvIniMatches.size();i++)
+    // -------------------------------
+    // 2. Create MapPoints from initial matches
+    // -------------------------------
+    for(size_t i = 0; i < mvIniMatches.size(); i++)
     {
-        if(mvIniMatches[i]<0)
-            continue;
+        if(mvIniMatches[i] < 0) continue;
 
-        //Create MapPoint.
-        Eigen::Vector3f worldPos;
-        worldPos << mvIniP3D[i].x, mvIniP3D[i].y, mvIniP3D[i].z;
-        MapPoint* pMP = new MapPoint(worldPos,pKFcur,mpAtlas->GetCurrentMap());
+        cv::Point3f iniP3D = mvIniP3D[i];  // triangulated 3D point
 
-        pKFini->AddMapPoint(pMP,i);
-        pKFcur->AddMapPoint(pMP,mvIniMatches[i]);
+        // Create MapPoint
+        Eigen::Vector3f worldPos(iniP3D.x, iniP3D.y, iniP3D.z);
+MapPoint* pMP = new MapPoint(worldPos, pKFcur, mpAtlas->GetCurrentMap());
 
-        pMP->AddObservation(pKFini,i);
-        pMP->AddObservation(pKFcur,mvIniMatches[i]);
+mpAtlas->AddMapPoint(pMP);
 
+
+        pKFcur->AddMapPoint(pMP, mvIniMatches[i]);
+        pMP->AddObservation(pKFini, i);
+        pMP->AddObservation(pKFcur, mvIniMatches[i]);
+
+        // Finalize descriptors and geometry
         pMP->ComputeDistinctiveDescriptors();
         pMP->UpdateNormalAndDepth();
 
-        //Fill Current Frame structure
+        // Connect to current frame
         mCurrentFrame.mvpMapPoints[mvIniMatches[i]] = pMP;
         mCurrentFrame.mvbOutlier[mvIniMatches[i]] = false;
 
-        //Add to Map
+        // Add to global map
         mpAtlas->AddMapPoint(pMP);
     }
 
-
-    // Update Connections
+    // -------------------------------
+    // 3. Update keyframe connections
+    // -------------------------------
     pKFini->UpdateConnections();
     pKFcur->UpdateConnections();
 
-    std::set<MapPoint*> sMPs;
-    sMPs = pKFini->GetMapPoints();
+    // -------------------------------
+    // 4. Global Bundle Adjustment
+    // -------------------------------
+    cout << "New Map created with "
+         << mpAtlas->MapPointsInMap() << " points" << endl;
 
-    // Bundle Adjustment
-    Verbose::PrintMess("New Map created with " + to_string(mpAtlas->MapPointsInMap()) + " points", Verbose::VERBOSITY_QUIET);
-    Optimizer::GlobalBundleAdjustemnt(mpAtlas->GetCurrentMap(),20);
+    Optimizer::GlobalBundleAdjustemnt(mpAtlas->GetCurrentMap(), 20);
 
+    // -------------------------------
+    // 5. Depth scale correction (PingIntegration)
+    // -------------------------------
     float medianDepth = pKFini->ComputeSceneMedianDepth(2);
-    float invMedianDepth;
-    if(mSensor == System::IMU_MONOCULAR)
-        invMedianDepth = 4.0f/medianDepth; // 4.0f
-    else
-        invMedianDepth = 1.0f/medianDepth;
+    float invMedianDepth = 1.0f / medianDepth;
 
-    if(medianDepth<0 || pKFcur->TrackedMapPoints(1)<50) // TODO Check, originally 100 tracks
+    if(medianDepth < 0 || pKFcur->TrackedMapPoints(1) < 100)
     {
-        Verbose::PrintMess("Wrong initialization, reseting...", Verbose::VERBOSITY_QUIET);
-        mpSystem->ResetActiveMap();
+        cout << "Wrong initialization, resetting..." << endl;
+        Reset();
         return;
     }
 
-    // Scale initial baseline
-    Sophus::SE3f Tc2w = pKFcur->GetPose();
-    Tc2w.translation() *= invMedianDepth;
-    pKFcur->SetPose(Tc2w);
-
-    // Scale points
-    vector<MapPoint*> vpAllMapPoints = pKFini->GetMapPointMatches();
-    for(size_t iMP=0; iMP<vpAllMapPoints.size(); iMP++)
-    {
-        if(vpAllMapPoints[iMP])
-        {
-            MapPoint* pMP = vpAllMapPoints[iMP];
-            pMP->SetWorldPos(pMP->GetWorldPos()*invMedianDepth);
-            pMP->UpdateNormalAndDepth();
-        }
-    }
-
-    if (mSensor == System::IMU_MONOCULAR)
-    {
-        pKFcur->mPrevKF = pKFini;
-        pKFini->mNextKF = pKFcur;
-        pKFcur->mpImuPreintegrated = mpImuPreintegratedFromLastKF;
-
-        mpImuPreintegratedFromLastKF = new IMU::Preintegrated(pKFcur->mpImuPreintegrated->GetUpdatedBias(),pKFcur->mImuCalib);
-    }
+    // Use PingIntegration to rescale baseline & points
+    mpSystem->pingIntegrator->RescaleInitialMap(pKFini, pKFcur, invMedianDepth);
 
 
+    // -------------------------------
+    // 6. Final bookkeeping
+    // -------------------------------
     mpLocalMapper->InsertKeyFrame(pKFini);
     mpLocalMapper->InsertKeyFrame(pKFcur);
-    mpLocalMapper->mFirstTs=pKFcur->mTimeStamp;
 
     mCurrentFrame.SetPose(pKFcur->GetPose());
-    mnLastKeyFrameId=mCurrentFrame.mnId;
+    mnLastKeyFrameId = mCurrentFrame.mnId;
     mpLastKeyFrame = pKFcur;
-    //mnLastRelocFrameId = mInitialFrame.mnId;
 
     mvpLocalKeyFrames.push_back(pKFcur);
     mvpLocalKeyFrames.push_back(pKFini);
-    mvpLocalMapPoints=mpAtlas->GetAllMapPoints();
+
+    mvpLocalMapPoints = mpAtlas->GetAllMapPoints();
     mpReferenceKF = pKFcur;
     mCurrentFrame.mpReferenceKF = pKFcur;
 
-    // Compute here initial velocity
-    vector<KeyFrame*> vKFs = mpAtlas->GetAllKeyFrames();
-
-    Sophus::SE3f deltaT = vKFs.back()->GetPose() * vKFs.front()->GetPoseInverse();
-    mbVelocity = false;
-    Eigen::Vector3f phi = deltaT.so3().log();
-
-    double aux = (mCurrentFrame.mTimeStamp-mLastFrame.mTimeStamp)/(mCurrentFrame.mTimeStamp-mInitialFrame.mTimeStamp);
-    phi *= aux;
-
     mLastFrame = Frame(mCurrentFrame);
 
-    mpAtlas->SetReferenceMapPoints(mvpLocalMapPoints);
+mpAtlas->SetReferenceMapPoints(mvpLocalMapPoints);
+mpMapDrawer->SetCurrentCameraPose(pKFcur->GetPose());
+mpAtlas->GetCurrentMap()->mvpKeyFrameOrigins.push_back(pKFini);
 
-    mpMapDrawer->SetCurrentCameraPose(pKFcur->GetPose());
 
-    mpAtlas->GetCurrentMap()->mvpKeyFrameOrigins.push_back(pKFini);
-
-    mState=OK;
-
-    initID = pKFcur->mnId;
+    mState = OK;
 }
+
+
 
 
 void Tracking::CreateMapInAtlas()
@@ -4122,5 +4127,99 @@ void Tracking::Release()
     mbStopRequested = false;
 }
 #endif
+
+void Tracking::ApplySonarFusion(Frame &F)
+{
+    const SonarData &sonar = F.mSonarData;
+
+    // 1. Basic validation
+    if (sonar.range <= 0.0f) {
+        std::cout << "[ApplySonarFusion] Invalid sonar range" << std::endl;
+        return;
+    }
+
+    if (!mpSystem->pingIntegrator->ValidateWithIntensity(sonar)) {
+        std::cout << "[ApplySonarFusion] Intensity check failed" << std::endl;
+        return;
+    }
+
+    // 2. Update PingIntegration state (range, angle, intensities, effectiveDist)
+    mpSystem->pingIntegrator->SetPingScan(
+        sonar.range,
+        sonar.angle,
+        sonar.intensities
+    );
+
+    // 3. Project sonar beam into camera image (find matched feature)
+    mpSystem->pingIntegrator->ProjectRectangle(F, sonar);
+
+    // 4. Compute sonar vs SLAM depth ratio
+    float depthRatio = mpSystem->pingIntegrator->GetSonarDepthRatio(F);
+
+    // 5. Apply correction at frame level
+    mpSystem->pingIntegrator->RescaleDepth(F, sonar);
+
+    // 6. Optionally apply map rescaling at init
+    if (F.mnId == 0 && depthRatio != 1.0f) {
+        if (mCurrentFrame.mpReferenceKF) {
+            mpSystem->pingIntegrator->RescaleInitialMap(
+                mInitialFrame.mpReferenceKF,
+                mCurrentFrame.mpReferenceKF,
+                depthRatio
+            );
+        }
+    }
+
+    // 7. Transform sonar point into world frame (for visualization/debug)
+    F.mPingPoint = mpSystem->pingIntegrator->TransformPingPointToWorld(F, sonar);
+
+    std::cout << "[ApplySonarFusion] range=" << sonar.range
+              << " angle=" << sonar.angle
+              << " depthRatio=" << depthRatio
+              << " frame=" << F.mnId
+              << std::endl;
+}
+
+
+// float Tracking::ApplySonarDepthCorrection(Frame &F)
+// {
+//     float depthRatio = -1.0f;
+//     const SonarData &sonar = F.mSonarData;
+
+//     if (!mpSystem->pingIntegrator->ValidateWithIntensity(sonar))
+//         return depthRatio;
+
+    
+
+//     // --- Use the pose properly via Sophus ---
+//     Sophus::SE3f Tcw = F.GetPose();
+//     Eigen::Vector3f camPos = Tcw.translation();   // (x,y,z) of camera in world
+
+//     float slamDepth = camPos.z();    // camera Z
+//     float sonarDepth = sonar.range;  // sonar CSV range
+
+//     if (sonarDepth > 0.0f) {
+//         depthRatio = slamDepth / sonarDepth;
+
+//         if (std::fabs(depthRatio - 1.0f) > 0.05f) // only correct if >5% off
+//         {
+//             // adjust camera translation
+//             Eigen::Vector3f vec(0,0,sonarDepth);
+//             Eigen::Vector3f correction = camPos - vec;
+//             Eigen::Vector3f newCamPos = camPos - (1.0f - depthRatio) * correction;
+
+//             // rebuild pose
+//             Sophus::SE3f newTcw(Tcw.rotationMatrix(), newCamPos);
+//             F.SetPose(newTcw);
+
+//             std::cout << "[ApplySonarDepthCorrection] depthRatio=" << depthRatio
+//                       << " oldZ=" << slamDepth
+//                       << " sonarZ=" << sonarDepth
+//                       << " newZ=" << newCamPos.z() << std::endl;
+//         }
+//     }
+
+//     return depthRatio;
+// }
 
 } //namespace ORB_SLAM

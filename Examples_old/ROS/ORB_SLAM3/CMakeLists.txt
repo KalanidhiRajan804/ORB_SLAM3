@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 2.4.6)
 include($ENV{ROS_ROOT}/core/rosbuild/rosbuild.cmake)
+rosbuild_init(orbslam3_ros)
 
-rosbuild_init()
 
 IF(NOT ROS_BUILD_TYPE)
   SET(ROS_BUILD_TYPE Release)
@@ -114,3 +114,7 @@ src/ros_stereo_inertial.cc
 target_link_libraries(Stereo_Inertial
 ${LIBS}
 )
+
+
+add_executable(mono_sonar src/ros_mono_sonar.cc)
+target_link_libraries(mono_sonar ${PROJECT_NAME} ${ROS_LIBRARIES})

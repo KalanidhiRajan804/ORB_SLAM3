@@ -36,6 +36,8 @@
 #include "System.h"
 #include "ImuTypes.h"
 #include "Settings.h"
+#include "SonarData.h"
+#include "PingIntegration.h"
 
 #include "GeometricCamera.h"
 
@@ -71,7 +73,14 @@ public:
     // Preprocess the input and call Track(). Extract features and performs stereo matching.
     Sophus::SE3f GrabImageStereo(const cv::Mat &imRectLeft,const cv::Mat &imRectRight, const double &timestamp, string filename);
     Sophus::SE3f GrabImageRGBD(const cv::Mat &imRGB,const cv::Mat &imD, const double &timestamp, string filename);
-    Sophus::SE3f GrabImageMonocular(const cv::Mat &im, const double &timestamp, string filename);
+    
+
+    Sophus::SE3f GrabImageMonocular(const cv::Mat &im,
+                                    const double &timestamp,
+                                    std::string filename = "",
+                                    const SonarData &sonar = SonarData());
+
+
 
     void GrabImuData(const IMU::Point &imuMeasurement);
 
@@ -130,6 +139,10 @@ public:
 
     eTrackingState mState;
     eTrackingState mLastProcessedState;
+
+    // --- Sonar depth correction additions ---
+    float ApplySonarDepthCorrection(Frame &F);
+
 
     // Input sensor
     int mSensor;
@@ -191,6 +204,10 @@ public:
     vector<double> vdNewKF_ms;
     vector<double> vdTrackTotal_ms;
 #endif
+
+    void ApplySonarFusion(Frame &F);
+
+
 
 protected:
 

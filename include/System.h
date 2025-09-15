@@ -27,6 +27,7 @@
 #include<string>
 #include<thread>
 #include<opencv2/core/core.hpp>
+#include <memory>
 
 #include "Tracking.h"
 #include "FrameDrawer.h"
@@ -39,6 +40,8 @@
 #include "Viewer.h"
 #include "ImuTypes.h"
 #include "Settings.h"
+#include "SonarData.h"
+#include "PingIntegration.h"
 
 
 namespace ORB_SLAM3
@@ -118,8 +121,13 @@ public:
     // Proccess the given monocular frame and optionally imu data
     // Input images: RGB (CV_8UC3) or grayscale (CV_8U). RGB is converted to grayscale.
     // Returns the camera pose (empty if tracking fails).
-    Sophus::SE3f TrackMonocular(const cv::Mat &im, const double &timestamp, const vector<IMU::Point>& vImuMeas = vector<IMU::Point>(), string filename="");
+    Sophus::SE3f TrackMonocular(const cv::Mat &im,
+                            const double &timestamp,
+                            const std::vector<IMU::Point>& vImuMeas = std::vector<IMU::Point>(),
+                            std::string filename = "",
+                            const SonarData &sonar = SonarData());
 
+     
 
     // This stops local mapping thread (map building) and performs only camera tracking.
     void ActivateLocalizationMode();
@@ -176,6 +184,8 @@ public:
     int GetTrackingState();
     std::vector<MapPoint*> GetTrackedMapPoints();
     std::vector<cv::KeyPoint> GetTrackedKeyPointsUn();
+
+    std::unique_ptr<PingIntegration> pingIntegrator;
 
     // For debugging
     double GetTimeFromIMUInit();
