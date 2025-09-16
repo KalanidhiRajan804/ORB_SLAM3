@@ -61,11 +61,14 @@ Sonar.StepCount: 400
 Sonar.ForwardStep: 200
 Sonar.Clockwise: 1
 Sonar.Yaw0Deg: 0.0
+Sonar.SteptoDeg: 0.9
 
-Sonar.abs_thresh: 40   # absolute intensity threshold
+Sonar.abs_thresh: 30    # absolute intensity threshold
 Sonar.peak_prom: 20      # required prominence above neighbors
 Sonar.band_lo: 1.0       # lower bound of valid detection band (m)
-Sonar.band_hi: 1.3       # upper bound of valid detection band (m)
+Sonar.band_hi: 1.4      # upper bound of valid detection band (m)
+
+
 
 
 

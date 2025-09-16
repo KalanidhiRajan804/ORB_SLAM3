@@ -31,7 +31,8 @@
 #include "PingIntegration.h"
 
 #include <iostream>
-
+#include <Eigen/Core>
+#include <Eigen/Geometry>
 
 #include <mutex>
 #include <chrono>
@@ -70,6 +71,8 @@ Tracking::Tracking(System *pSys, ORBVocabulary* pVoc, FrameDrawer *pFrameDrawer,
         {
             std::cout << "*Error with the ORB parameters in the config file*" << std::endl;
         }
+
+
 
         bool b_parse_imu = true;
         if(sensor==System::IMU_MONOCULAR || sensor==System::IMU_STEREO || sensor==System::IMU_RGBD)
@@ -131,6 +134,11 @@ Tracking::Tracking(System *pSys, ORBVocabulary* pVoc, FrameDrawer *pFrameDrawer,
     vdNewKF_ms.clear();
     vdTrackTotal_ms.clear();
 #endif
+
+// --- Init sonar integration ---
+pingIntegrator.reset(new PingIntegration(strSettingPath));
+
+
 }
 
 #ifdef REGISTER_TIMES
@@ -4131,54 +4139,151 @@ void Tracking::Release()
 void Tracking::ApplySonarFusion(Frame &F)
 {
     const SonarData &sonar = F.mSonarData;
+    if (sonar.range <= 0.0f) return;
 
-    // 1. Basic validation
-    if (sonar.range <= 0.0f) {
-        std::cout << "[ApplySonarFusion] Invalid sonar range" << std::endl;
-        return;
+    pingIntegrator->SetPingScan(sonar.range, sonar.angle, sonar.intensities);
+
+    Eigen::Vector3f v_s = pingIntegrator->BeamVector(sonar);
+    auto corners_sonar  = pingIntegrator->BeamRectangle(v_s, pingIntegrator->pingEffectiveDist);
+
+    pingIntegrator->ProjectRectangle(F, sonar);
+
+    float depthRatio = pingIntegrator->GetSonarDepthRatio(F);
+    pingIntegrator->RescaleDepth(F, sonar);
+
+    if (F.mnId == 0 && depthRatio != 1.0f && mCurrentFrame.mpReferenceKF) {
+        pingIntegrator->RescaleInitialMap(
+            mInitialFrame.mpReferenceKF,
+            mCurrentFrame.mpReferenceKF,
+            depthRatio
+        );
     }
 
-    if (!mpSystem->pingIntegrator->ValidateWithIntensity(sonar)) {
-        std::cout << "[ApplySonarFusion] Intensity check failed" << std::endl;
-        return;
-    }
-
-    // 2. Update PingIntegration state (range, angle, intensities, effectiveDist)
-    mpSystem->pingIntegrator->SetPingScan(
-        sonar.range,
-        sonar.angle,
-        sonar.intensities
-    );
-
-    // 3. Project sonar beam into camera image (find matched feature)
-    mpSystem->pingIntegrator->ProjectRectangle(F, sonar);
-
-    // 4. Compute sonar vs SLAM depth ratio
-    float depthRatio = mpSystem->pingIntegrator->GetSonarDepthRatio(F);
-
-    // 5. Apply correction at frame level
-    mpSystem->pingIntegrator->RescaleDepth(F, sonar);
-
-    // 6. Optionally apply map rescaling at init
-    if (F.mnId == 0 && depthRatio != 1.0f) {
-        if (mCurrentFrame.mpReferenceKF) {
-            mpSystem->pingIntegrator->RescaleInitialMap(
-                mInitialFrame.mpReferenceKF,
-                mCurrentFrame.mpReferenceKF,
-                depthRatio
-            );
-        }
-    }
-
-    // 7. Transform sonar point into world frame (for visualization/debug)
-    F.mPingPoint = mpSystem->pingIntegrator->TransformPingPointToWorld(F, sonar);
-
-    std::cout << "[ApplySonarFusion] range=" << sonar.range
-              << " angle=" << sonar.angle
-              << " depthRatio=" << depthRatio
-              << " frame=" << F.mnId
-              << std::endl;
+    F.mPingPoint = pingIntegrator->TransformPingPointToWorld(F, sonar);
 }
+
+
+
+
+
+
+
+// void Tracking::ApplySonarFusion(Frame &F)
+// {
+//     const SonarData &sonar = F.mSonarData;
+
+// //     if (!F.mpReferenceKF) {
+// //     std::cout << "[ApplySonarFusion] skip (map not initialized yet)" << std::endl;
+// //     return;
+// // }
+
+
+//     // 1. Basic validation
+//     if (sonar.range <= 0.0f) {
+//         std::cout << "[ApplySonarFusion] Invalid sonar range" << std::endl;
+//         return;
+//     }
+
+//     // if (!pingIntegrator->ValidateWithIntensity(sonar)) {
+//     //     std::cout << "[ApplySonarFusion] Intensity check failed" << std::endl;
+//     //     return;
+//     // }
+
+//     // 2. Update PingIntegration state (range, angle, intensities, effectiveDist)
+//     pingIntegrator->SetPingScan(
+//         sonar.range,
+//         sonar.angle,
+//         sonar.intensities
+//     );
+
+//     // 3. Beam vector + corners (optional debug)
+//     Eigen::Vector3f v_s = pingIntegrator->BeamVector(sonar);
+//     auto corners_sonar = pingIntegrator->BeamRectangle(v_s, pingIntegrator->pingEffectiveDist);
+
+//     std::cout << "[ApplySonarFusion] sonar.angle=" << sonar.angle
+//               << " corners_sonar=" << corners_sonar.size() << std::endl;
+
+//     // 4. Project sonar beam into camera image (find matched feature)
+//     pingIntegrator->ProjectRectangle(F, sonar);
+
+//     // 5. Compute sonar vs SLAM depth ratio
+//     float depthRatio = pingIntegrator->GetSonarDepthRatio(F);
+
+//     // 6. Apply correction at frame level
+//     pingIntegrator->RescaleDepth(F, sonar);
+
+//     // 7. Optionally apply map rescaling at init
+//     if (F.mnId == 0 && depthRatio != 1.0f) {
+//         if (mCurrentFrame.mpReferenceKF) {
+//             pingIntegrator->RescaleInitialMap(
+//                 mInitialFrame.mpReferenceKF,
+//                 mCurrentFrame.mpReferenceKF,
+//                 depthRatio
+//             );
+//         }
+//     }
+
+//     // 8. Transform sonar point into world frame (for visualization/debug)
+//     F.mPingPoint = pingIntegrator->TransformPingPointToWorld(F, sonar);
+
+//     std::cout << "[ApplySonarFusion] range=" << sonar.range
+//               << " angle=" << sonar.angle
+//               << " depthRatio=" << depthRatio
+//               << " frame=" << F.mnId
+//               << std::endl;
+// }
+
+// void Tracking::ApplySonarFusion(Frame &F)
+// {
+//     const SonarData &sonar = F.mSonarData;
+
+//     // 1. Basic validation
+//     if (sonar.range <= 0.0f) {
+//         std::cout << "[ApplySonarFusion] Invalid sonar range" << std::endl;
+//         return;
+//     }
+
+//     if (!mpSystem->pingIntegrator->ValidateWithIntensity(sonar)) {
+//         std::cout << "[ApplySonarFusion] Intensity check failed" << std::endl;
+//         return;
+//     }
+
+//     // 2. Update PingIntegration state (range, angle, intensities, effectiveDist)
+//     mpSystem->pingIntegrator->SetPingScan(
+//         sonar.range,
+//         sonar.angle,
+//         sonar.intensities
+//     );
+
+//     // 3. Project sonar beam into camera image (find matched feature)
+//     mpSystem->pingIntegrator->ProjectRectangle(F, sonar);
+
+//     // 4. Compute sonar vs SLAM depth ratio
+//     float depthRatio = mpSystem->pingIntegrator->GetSonarDepthRatio(F);
+
+//     // 5. Apply correction at frame level
+//     mpSystem->pingIntegrator->RescaleDepth(F, sonar);
+
+//     // 6. Optionally apply map rescaling at init
+//     if (F.mnId == 0 && depthRatio != 1.0f) {
+//         if (mCurrentFrame.mpReferenceKF) {
+//             mpSystem->pingIntegrator->RescaleInitialMap(
+//                 mInitialFrame.mpReferenceKF,
+//                 mCurrentFrame.mpReferenceKF,
+//                 depthRatio
+//             );
+//         }
+//     }
+
+//     // 7. Transform sonar point into world frame (for visualization/debug)
+//     F.mPingPoint = mpSystem->pingIntegrator->TransformPingPointToWorld(F, sonar);
+
+//     std::cout << "[ApplySonarFusion] range=" << sonar.range
+//               << " angle=" << sonar.angle
+//               << " depthRatio=" << depthRatio
+//               << " frame=" << F.mnId
+//               << std::endl;
+// }
 
 
 // float Tracking::ApplySonarDepthCorrection(Frame &F)

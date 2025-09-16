@@ -21,6 +21,7 @@ Terminal 1
 roscore
 
 Terminal 2
+source /root/catkin_ws/devel/setup.bash
 rosbag play /Datasets/run01.bag --clock
 
 Terminal 3

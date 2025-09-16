@@ -209,6 +209,7 @@ public:
 
 
 
+
 protected:
 
     // Main tracking function. It is independent of the input sensor.
@@ -254,6 +255,8 @@ protected:
     // Queue of IMU measurements between frames
     std::list<IMU::Point> mlQueueImuData;
 
+    
+
     // Vector of IMU measurements from previous to current frame (to be filled by PreintegrateIMU)
     std::vector<IMU::Point> mvImuFromLastFrame;
     std::mutex mMutexImuQueue;
@@ -277,6 +280,8 @@ protected:
     //ORB
     ORBextractor* mpORBextractorLeft, *mpORBextractorRight;
     ORBextractor* mpIniORBextractor;
+
+    std::unique_ptr<PingIntegration> pingIntegrator;
 
     //BoW
     ORBVocabulary* mpORBVocabulary;
